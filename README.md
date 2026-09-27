@@ -11,10 +11,10 @@ bun run dev
 
 ## Draw workflow
 
-1. Upload separate real and display-only (fake) CSVs. The studio has a downloadable template.
+1. Open `/#private` for operator setup. Upload separate real and display-only (fake) CSVs; the setup modal has a downloadable template. There is no setup link or eligibility information on the public pages.
 2. Add or edit gift names and images; use the arrows to assign gift order to round order.
 3. Prepare the draw to randomly assign every participant to exactly one round, with at least one real entrant in each.
-4. Spin each round, advance after the winner is revealed, and export winners from the Winners screen.
+4. Use the rolling Cylinder selector or switch to the retained Wheel. Both use the same selection rules and saved outcomes. Advance after the winner is revealed and export winners from the Winners screen. Reset a draw from `/#private`.
 
 Required CSV headers, in any order and capitalization:
 
@@ -45,3 +45,7 @@ bun run preview
 ```
 
 Deploy the generated dist/ directory to any static host. Use HTTPS outside localhost for browser cryptographic APIs.
+
+## Branding
+
+The palette and typography follow [Fresh Masala](https://freshmasala.com.np): teal, warm cream, Plus Jakarta Sans, and Playfair Display. The logo and product banner in `public/brand/` are local copies downloaded from that site for this project. The public interface has only Draw Studio and Winners; gifts sit to the left of the selector on desktop.

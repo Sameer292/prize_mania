@@ -1,26 +1,22 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500;1,600&display=swap');
 @import 'tailwindcss';
 
 @theme {
-  --font-sans: 'DM Sans', sans-serif;
-  --font-heading: 'Manrope', sans-serif;
-  --color-ink: #302d3d;
-  --color-muted: #7a7088;
-  --color-line: #ebe6f0;
-  --color-plum: #8056b7;
-  --color-soft: #f1ebf8;
-  --color-lilac: #d9caed;
-  --color-sage: #83a88c;
+  --font-sans: 'Plus Jakarta Sans', sans-serif;
+  --font-heading: 'Playfair Display', Georgia, serif;
+  --color-ink: #1c1917;
+  --color-muted: #78716c;
+  --color-line: #e7e5e4;
+  --color-brand: #087d68;
+  --color-brand-dark: #066652;
+  --color-accent: #d97706;
+  --color-soft: #e6f4ee;
+  --color-cream: #faf7f2;
+  --color-paper: #faf9f6;
 }
 
 @layer base {
-  body { @apply m-0 bg-[#f8f9fb] font-sans text-sm text-ink antialiased; }
-  h1 { @apply font-heading text-[27px] leading-snug font-bold tracking-tight sm:text-[30px]; }
-  h2 { @apply font-heading text-sm font-bold tracking-tight; }
+  body { @apply m-0 bg-paper font-sans text-base text-ink antialiased; }
   button { @apply cursor-pointer transition disabled:cursor-not-allowed disabled:opacity-40; }
-  button, a, input { @apply focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-plum; }
-  table { @apply w-full border-collapse text-left text-[11px] whitespace-nowrap; }
-  th { @apply bg-soft/30 px-3 py-3 text-[9px] font-medium tracking-wide text-muted uppercase; }
-  td { @apply border-b border-line/60 px-3 py-3.5 text-muted; }
-  td strong { @apply font-medium text-ink/70; }
+  button, a, input { @apply focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-brand; }
 }
