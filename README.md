@@ -11,10 +11,10 @@ bun run dev
 
 ## Draw workflow
 
-1. Open `/#private` for operator setup. Upload separate real and display-only (fake) CSVs; the setup modal has a downloadable template. There is no setup link or eligibility information on the public pages.
+1. Upload the real participant CSV on the Draw studio home screen, using its CSV template. Display-only (fake) CSVs are uploaded only in `/#private`, which has no public link. You can upload the display-only list first. The public total is zero until a real list is added, then counts both lists.
 2. Add or edit gift names and images; use the arrows to assign gift order to round order.
 3. Prepare the draw to randomly assign every participant to exactly one round, with at least one real entrant in each.
-4. Use the rolling Cylinder selector or switch to the retained Wheel. Both use the same selection rules and saved outcomes. Advance after the winner is revealed and export winners from the Winners screen. Reset a draw from `/#private`.
+4. Use the rolling Cylinder selector or switch to the retained Wheel. Both use the same selection rules and saved outcomes. Each spin opens a livestream stage: a 3–2–1 countdown, an eight-second roll, and a large winner announcement with red/teal confetti and the prize alongside it. Use Fullscreen to hide browser chrome. Reduced motion skips the countdown and animation. Advance after the reveal and export results from Winners.
 
 Required CSV headers, in any order and capitalization:
 
@@ -23,7 +23,9 @@ Coupon code,Participant name,Phone number,week number,status,Activated at
 REAL-001,Asha Sharma,9800000001,1,Activated,2026-09-01
 ```
 
-All uploaded real entries are eligible, regardless of status or week. Duplicate coupon codes (ignoring case/outer spaces) or phone numbers (ignoring formatting and normalizing international 00 prefixes) are rejected. Fake imports that overlap the real list are rejected in full, leaving existing data unchanged. Replacing the real list with overlapping data removes the old fake list and shows a notification.
+All uploaded real entries are eligible, regardless of status or week. Duplicate coupon codes (ignoring case/outer spaces) or phone numbers (ignoring formatting and normalizing international 00 prefixes) are rejected. Fake imports that overlap the real list are rejected in full, leaving existing data unchanged. Replacing the real list with overlapping data removes the old display-only list; its operator notice stays in `/#private`. Public import messages never mention it.
+
+The expandable **Reset & start over** panel offers separate resets for gifts, winners, participants, and everything. Every reset asks for confirmation. Gifts restore the four starter prizes; winners clear the round assignments; participants clear both lists. Changing gifts or participants also clears existing rounds and winners. Reset everything clears both lists and results and restores starter gifts. Export winners before resetting.
 
 ## Round and winner rules
 
@@ -48,4 +50,4 @@ Deploy the generated dist/ directory to any static host. Use HTTPS outside local
 
 ## Branding
 
-The palette and typography follow [Fresh Masala](https://freshmasala.com.np): teal, warm cream, Plus Jakarta Sans, and Playfair Display. The logo and product banner in `public/brand/` are local copies downloaded from that site for this project. The public interface has only Draw Studio and Winners; gifts sit to the left of the selector on desktop.
+The palette and typography follow [Fresh Masala](https://freshmasala.com.np): red, teal, warm cream, Plus Jakarta Sans, and Playfair Display. The logo and product banner in `public/brand/` are local copies downloaded from that site for this project. The public interface has only Draw Studio and Winners; gifts sit to the left of the selector on desktop.

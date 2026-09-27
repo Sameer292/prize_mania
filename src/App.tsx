@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { assertUnique, headers, parseParticipants, prepareRounds, randomIndex, roundSizes, selectWinner, storageKey, validateState, winnersCsv } from './draw'
-import type { DrawState, Gift } from './draw'
-import { Cylinder, Wheel } from './Selector'
+import { assertUnique, headers, parseParticipants, prepareRounds, randomIndex, resetDraw, roundSizes, selectWinner, storageKey, validateState, winnersCsv } from './draw'
+import type { DrawState, Gift, ResetPart, Round } from './draw'
+import { Cylinder, Wheel, spinDuration } from './Selector'
 
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const paths: Record<string, string> = {
@@ -65,6 +65,9 @@ function App() {
   const [toast, setToast] = useState('')
   const [editor, setEditor] = useState<Gift | null>(null)
   const [spinning, setSpinning] = useState(false)
+  const [countdown, setCountdown] = useState<number | null>(null)
+  const [stageOpen, setStageOpen] = useState(false)
+  const drawing = spinning || countdown !== null
   const [showWinner, setShowWinner] = useState(state.rounds.some(r => r.winner))
   const [rotation, setRotation] = useState(() => {
     const previous = state.rounds.filter(r => r.winner).at(-1)
@@ -74,14 +77,14 @@ function App() {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inFlight = useRef(false)
   const [storageError, setStorageError] = useState(loadError.current)
-  const total = state.real.length + state.fake.length
+  const total = state.real.length > 0 ? state.real.length + state.fake.length : 0
   const locked = state.rounds.length > 0
   const completed = state.rounds.filter(r => r.winner).length
-  const activeIndex = spinning || showWinner ? Math.max(0, completed - 1) : completed
+  const activeIndex = drawing || showWinner ? Math.max(0, completed - 1) : completed
   const round = state.rounds[activeIndex]
   const currentGift = state.gifts[activeIndex]
-  const allDone = locked && completed === state.rounds.length && !spinning
-  const recentWinner = !spinning ? state.rounds[completed - 1]?.winner : undefined
+  const allDone = locked && completed === state.rounds.length && !drawing
+  const recentWinner = !drawing ? state.rounds[completed - 1]?.winner : undefined
   let sizes: number[] = []
   try { sizes = roundSizes(total, state.gifts.length) } catch { /* Setup explains missing requirements below. */ }
 
@@ -142,7 +145,7 @@ function App() {
         else setPrivateNotice(`${people.length} display-only participants imported successfully.`)
         if (removed) setPrivateNotice('The real list was replaced. Overlapping display-only entries were removed; upload a non-overlapping CSV here.')
       }
-    } catch (error) { (real ? setToast : setPrivateNotice)((error as Error).message.replace('No fake data was accepted.', 'No data was accepted.')) }
+    } catch (error) { (real ? setToast : setPrivateNotice)((error as Error).message) }
     finally { inFlight.current = false; setBusy(false) }
   }
 
@@ -164,15 +167,34 @@ function App() {
       const rounds = state.rounds.map((r, i) => i === activeIndex ? { ...r, winner } : r)
       // Commit the outcome before animation so a refresh cannot reroll a winner.
       if (!commit({ ...state, rounds })) return
-      inFlight.current = true; setSpinning(true); setRotation(nextRotation)
-      timer.current = setTimeout(() => { inFlight.current = false; setShowWinner(true); setSpinning(false) }, window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 250 : 6200)
+      inFlight.current = true; setStageOpen(true); setShowWinner(false)
+      function reveal() { inFlight.current = false; setShowWinner(true); setSpinning(false); setCountdown(null) }
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { reveal(); return }
+      function count(value: number) {
+        setCountdown(value)
+        timer.current = setTimeout(() => {
+          if (value > 1) count(value - 1)
+          else {
+            setCountdown(null); setSpinning(true); setRotation(nextRotation)
+            timer.current = setTimeout(reveal, spinDuration + 200)
+          }
+        }, 1000)
+      }
+      count(3)
     } catch (error) { setToast((error as Error).message) }
   }
 
-  function reset() {
-    if (spinning || busy) return
-    if (!window.confirm('Reset all rounds and winners? Your participant lists and gifts will stay. Download results first if you need them.')) return
-    if (commit({ ...state, rounds: [] })) { setShowWinner(false); setRotation(0); setToast('Draw reset. You can edit your setup again.') }
+  function reset(part: ResetPart = 'winners') {
+    if (drawing || busy) return
+    const messages = {
+      winners: 'Clear all winners and round assignments? Your participants and gifts will stay. Export winners first if you need them.',
+      gifts: 'Restore the four starter gifts? All custom gift names and images will be removed. Any rounds and winners will also be cleared. Participants will stay.',
+      participants: 'Remove all participants? Any rounds and winners will also be cleared. Gifts will stay.',
+      everything: 'Reset everything in this browser? All participants, rounds, winners and custom gifts will be removed. The four starter gifts will be restored.',
+    }
+    if (!window.confirm(messages[part])) return
+    const next = resetDraw(state, part, initialGifts)
+    if (commit(next)) { setStageOpen(false); setShowWinner(false); setRotation(0); setPreviewGiftId(''); setToast('Reset complete. You can prepare a fresh draw.') }
   }
 
   async function setImage(file: File | undefined) {
@@ -207,7 +229,7 @@ function App() {
   function openEditor(gift: Gift) { setToast(''); setEditor({ ...gift }) }
 
   return <div className="min-h-screen bg-paper">
-    <header className="border-b border-line bg-white">
+    <header className="border-b border-line border-t-4 border-t-masala bg-white">
       <div className="mx-auto flex max-w-[1480px] items-center justify-between gap-4 px-5 py-3 sm:px-8 lg:px-12">
         <a href="#studio" aria-label="Fresh Masala draw studio" className="flex items-center gap-4">
           <img src="/brand/fresh-masala-logo.png" alt="Fresh Masala" className="h-20 w-36 object-contain sm:h-24 sm:w-44" />
@@ -225,19 +247,19 @@ function App() {
         <section className="mb-8 grid overflow-hidden rounded-[24px] border border-line bg-cream sm:grid-cols-[1.1fr_1fr]">
           <div className="px-7 py-9 sm:px-10 sm:py-11">
             <span className="mb-4 inline-flex items-center gap-2 text-xs font-bold tracking-[.2em] text-brand"><span className="h-px w-6 bg-brand" /> FRESH MASALA LUCKY DRAW</span>
-            <h1 className="font-heading text-[40px] leading-[1.12] tracking-tight sm:text-[48px] xl:text-[58px]">A little spice.<br /><span className="italic text-brand">A lot of luck.</span></h1>
+            <h1 className="font-heading text-[40px] leading-[1.12] tracking-tight sm:text-[48px] xl:text-[58px]">A little spice.<br /><span className="italic text-masala">A lot of luck.</span></h1>
             <p className="mt-5 max-w-md text-base leading-relaxed text-muted sm:text-lg">A thank-you to the people who make our story special. Let’s make someone’s day.</p>
           </div>
           <div className="relative hidden min-h-[290px] sm:block"><img src="/brand/fresh-masala-banner.jpg" alt="Fresh Masala spice and tea products" className="absolute inset-0 size-full object-cover" /><span className="absolute inset-y-0 left-0 w-16 bg-gradient-to-r from-cream to-transparent" /></div>
         </section>
 
         <section className="mb-8 grid grid-cols-3 divide-x divide-line rounded-2xl border border-line bg-white px-2 py-5 sm:px-6 sm:py-6" aria-label="Draw statistics">
-          {[['people', total, 'Participants'], ['gift', state.gifts.length, 'Gifts & rounds'], ['trophy', completed, 'Lucky winners']].map(([icon, number, label]) => <div className="flex items-center justify-center gap-3 px-2 sm:gap-5" key={label}><span className="hidden size-12 items-center justify-center rounded-xl bg-soft text-brand sm:flex"><Icon name={String(icon)} size={25} /></span><div><strong className="block text-center font-sans text-3xl font-semibold tracking-tight sm:text-left sm:text-4xl">{number}</strong><span className="mt-1 block text-center text-xs text-muted sm:text-left sm:text-base">{label}</span></div></div>)}
+          {[['people', total, 'Participants'], ['gift', state.gifts.length, 'Gifts & rounds'], ['trophy', completed, 'Lucky winners']].map(([icon, number, label]) => <div className="flex items-center justify-center gap-3 px-2 sm:gap-5" key={label}><span className="hidden size-12 items-center justify-center rounded-xl bg-blush text-masala sm:flex"><Icon name={String(icon)} size={25} /></span><div><strong className="block text-center font-sans text-3xl font-semibold tracking-tight sm:text-left sm:text-4xl">{number}</strong><span className="mt-1 block text-center text-xs text-muted sm:text-left sm:text-base">{label}</span></div></div>)}
         </section>
 
         <section className="mb-8 rounded-2xl border border-brand/25 border-t-4 border-t-masala bg-white p-6 sm:p-8" aria-label="Add participants">
           <div className="flex flex-wrap items-center justify-between gap-5"><div><span className="text-xs font-bold tracking-[.18em] text-masala">THE PEOPLE BEHIND THE MOMENT</span><h2 className="mt-2 font-heading text-3xl">Add your participants.</h2><p className="mt-2 text-base text-muted">{locked ? `${state.real.length} participants registered. The list is locked for this draw.` : `${state.real.length} participants registered. Upload your CSV to get started.`}</p></div><div className="flex flex-wrap items-center gap-3">
-            {!locked && <label className={`relative flex items-center gap-2 rounded-xl px-6 py-4 text-base font-semibold btn-primary focus-within:outline-2 focus-within:outline-offset-3 focus-within:outline-brand ${busy || storageError ? 'pointer-events-none opacity-70' : 'cursor-pointer'}`}><Icon name="upload" /> {busy ? 'Reading file…' : state.real.length ? 'Replace participant CSV' : 'Upload participants CSV'}<input type="file" accept=".csv,text/csv" aria-label="Upload real participants CSV" className="absolute size-px opacity-0" disabled={locked || busy || !!storageError} onChange={e => { void upload(e.target.files?.[0], true); e.target.value = '' }} /></label>}
+            {!locked && <label className={`relative flex items-center gap-2 rounded-xl px-6 py-4 text-base font-semibold focus-within:outline-2 focus-within:outline-offset-3 focus-within:outline-brand ${busy || storageError ? 'pointer-events-none bg-[#e0e8e3] text-[#40554a]' : 'btn-primary cursor-pointer'}`}><Icon name="upload" /> {busy ? 'Reading file…' : state.real.length ? 'Replace participant CSV' : 'Upload participants CSV'}<input type="file" accept=".csv,text/csv" aria-label="Upload real participants CSV" className="absolute size-px opacity-0" disabled={locked || busy || !!storageError} onChange={e => { void upload(e.target.files?.[0], true); e.target.value = '' }} /></label>}
             <button className="flex items-center gap-2 rounded-xl border border-line px-4 py-3 text-base font-semibold text-brand" onClick={() => download('participants-template.csv', headers.join(',') + '\r\n')}><Icon name="download" /> CSV template</button>
             {!locked && state.real.length > 0 && <button className="px-3 py-3 text-sm font-semibold text-masala" disabled={busy || !!storageError} onClick={() => { if (window.confirm('Remove registered participants?')) commit({ ...state, real: [] }) }}>Clear participants</button>}
           </div></div>
@@ -248,7 +270,7 @@ function App() {
 
         <div className="grid items-start gap-7 lg:grid-cols-[minmax(0,.85fr)_minmax(0,1.15fr)]">
           <section className="rounded-[24px] border border-line bg-white p-6 sm:p-8" aria-label="Gift lineup">
-            <div className="mb-6 flex items-start justify-between gap-3"><div><span className="text-xs font-bold tracking-[.18em] text-brand">THE GIFT LINEUP</span><h2 className="mt-2 font-heading text-[30px]">Something to smile about.</h2></div>{!locked && <button className="grid size-11 shrink-0 place-items-center rounded-xl border border-line text-brand hover:bg-soft" aria-label="Add gift" disabled={busy || !!storageError} onClick={() => openEditor({ id: crypto.randomUUID(), name: '', image: giftImage('gift', '#edf5ee') })}><Icon name="plus" size={22} /></button>}</div>
+            <div className="mb-6 flex items-start justify-between gap-3"><div><span className="text-xs font-bold tracking-[.18em] text-masala">THE GIFT LINEUP</span><h2 className="mt-2 font-heading text-[30px]">Something to smile about.</h2></div>{!locked && <button className="grid size-11 shrink-0 place-items-center rounded-xl border border-line text-brand hover:bg-soft" aria-label="Add gift" disabled={busy || !!storageError} onClick={() => openEditor({ id: crypto.randomUUID(), name: '', image: giftImage('gift', '#edf5ee') })}><Icon name="plus" size={22} /></button>}</div>
 
             {previewGift ? <article className="mb-6 overflow-hidden rounded-2xl border border-line">
               <div className="relative flex h-[270px] items-center justify-center bg-cream sm:h-[300px]">
@@ -259,35 +281,84 @@ function App() {
               <div className="flex items-center justify-between gap-3 px-5 py-5"><div><h3 className="text-xl font-semibold">{previewGift.name}</h3><p className="mt-1 text-sm text-muted">One gift. One happy winner.</p></div><span className="text-3xl text-brand">✦</span></div>
             </article> : <p className="rounded-xl bg-paper p-8 text-center text-muted">Add a gift to begin.</p>}
 
-            <div className="grid gap-3">{state.gifts.map((gift, i) => <div key={gift.id} className={`flex items-center gap-3 rounded-xl border p-3 ${previewGift?.id === gift.id ? 'border-brand/35 bg-soft/50' : 'border-line'}`}>
-              <button className="flex min-w-0 flex-1 items-center gap-3 text-left" aria-disabled={locked} onClick={() => { if (!locked) setPreviewGiftId(gift.id) }} aria-label={`Preview ${gift.name}`}><img src={gift.image} alt="" className="size-14 shrink-0 rounded-lg object-cover" /><span className="min-w-0"><small className="block text-[11px] font-semibold tracking-widest text-muted">ROUND {String(i + 1).padStart(2, '0')}</small><strong className="mt-1 block text-sm font-semibold wrap-anywhere sm:text-base">{gift.name}</strong>{state.rounds[i]?.winner && !(spinning && i === activeIndex) && <span className="mt-1 flex items-center gap-1 text-xs text-brand"><Icon name="check" size={14} /> {state.rounds[i].winner?.name}</span>}</span></button>
-              {!locked && <div className="flex shrink-0 flex-col"><button className="px-2 py-1 text-brand" disabled={i === 0 || busy} aria-label={`Move ${gift.name} earlier`} onClick={() => moveGift(i, -1)}>↑</button><button className="px-2 py-1 text-brand" disabled={i === state.gifts.length - 1 || busy} aria-label={`Move ${gift.name} later`} onClick={() => moveGift(i, 1)}>↓</button></div>}{state.rounds[i]?.winner && !(spinning && i === activeIndex) && <Icon name="check" />}
+            <div className="grid gap-3">{state.gifts.map((gift, i) => <div key={gift.id} className={`flex items-center gap-3 rounded-xl border p-3 ${previewGift?.id === gift.id ? 'border-masala/30 bg-blush/70' : 'border-line'}`}>
+              <button className="flex min-w-0 flex-1 items-center gap-3 text-left" aria-disabled={locked} onClick={() => { if (!locked) setPreviewGiftId(gift.id) }} aria-label={`Preview ${gift.name}`}><img src={gift.image} alt="" className="size-14 shrink-0 rounded-lg object-cover" /><span className="min-w-0"><small className="block text-[11px] font-semibold tracking-widest text-muted">ROUND {String(i + 1).padStart(2, '0')}</small><strong className="mt-1 block text-sm font-semibold wrap-anywhere sm:text-base">{gift.name}</strong>{state.rounds[i]?.winner && !(drawing && i === activeIndex) && <span className="mt-1 flex items-center gap-1 text-xs text-brand"><Icon name="check" size={14} /> {state.rounds[i].winner?.name}</span>}</span></button>
+              {!locked && <div className="flex shrink-0 flex-col"><button className="px-2 py-1 text-brand" disabled={i === 0 || busy} aria-label={`Move ${gift.name} earlier`} onClick={() => moveGift(i, -1)}>↑</button><button className="px-2 py-1 text-brand" disabled={i === state.gifts.length - 1 || busy} aria-label={`Move ${gift.name} later`} onClick={() => moveGift(i, 1)}>↓</button></div>}{state.rounds[i]?.winner && !(drawing && i === activeIndex) && <Icon name="check" />}
             </div>)}</div>
             {!locked && <p className="mt-5 text-sm leading-relaxed text-muted">Arrange the gifts in the order you’d like to give them.</p>}
           </section>
 
-          <section className="rounded-[24px] border border-line bg-white p-6 sm:p-8" aria-label="Winner selector">
-            <div className="mb-6 flex flex-wrap items-center justify-between gap-4"><div><span className="text-xs font-bold tracking-[.18em] text-brand">{allDone ? 'EVERY GIFT HAS A WINNER' : locked ? `ROUND ${String(activeIndex + 1).padStart(2, '0')} OF ${String(state.gifts.length).padStart(2, '0')}` : 'LET THE GOOD LUCK BEGIN'}</span><h2 className="mt-2 font-heading text-[32px] sm:text-[38px]">{allDone ? 'What a lovely celebration.' : showWinner ? 'We have a winner!' : spinning ? 'A moment of suspense…' : 'Who’s the lucky one?'}</h2></div><div className="flex gap-1 rounded-xl bg-paper p-1" role="group" aria-label="Selector style">{(['cylinder', 'wheel'] as const).map(value => <button key={value} disabled={spinning} aria-pressed={mode === value} className={`rounded-lg px-4 py-2.5 text-sm font-semibold ${mode === value ? 'bg-white text-brand shadow-sm' : 'text-muted'}`} onClick={() => setMode(value)}>{value === 'cylinder' ? 'Cylinder' : 'Wheel'}</button>)}</div></div>
+          <section className="rounded-[24px] border border-brand/25 border-t-4 border-t-brand bg-white p-6 sm:p-8" aria-label="Winner selector">
+            <div className="mb-6 flex flex-wrap items-center justify-between gap-4"><div><span className="text-xs font-bold tracking-[.18em] text-brand">{allDone ? 'EVERY GIFT HAS A WINNER' : locked ? `ROUND ${String(activeIndex + 1).padStart(2, '0')} OF ${String(state.gifts.length).padStart(2, '0')}` : 'LET THE GOOD LUCK BEGIN'}</span><h2 className="mt-2 font-heading text-[32px] sm:text-[38px]">{allDone ? 'What a lovely celebration.' : showWinner ? 'We have a winner!' : spinning ? 'A moment of suspense…' : 'Who’s the lucky one?'}</h2></div><div className="flex gap-1 rounded-xl bg-paper p-1" role="group" aria-label="Selector style">{(['cylinder', 'wheel'] as const).map(value => <button key={value} disabled={drawing} aria-pressed={mode === value} className={`rounded-lg px-4 py-2.5 text-sm font-semibold ${mode === value ? 'bg-white text-brand shadow-sm' : 'text-muted'}`} onClick={() => setMode(value)}>{value === 'cylinder' ? 'Cylinder' : 'Wheel'}</button>)}</div></div>
             <p className="mb-7 text-base text-muted">{locked && currentGift ? currentGift.name : 'A little anticipation. A moment to remember.'}</p>
             <div className="flex min-h-[390px] items-center justify-center">{mode === 'cylinder' ? <Cylinder key={round?.giftId || 'preview'} round={round} spinning={spinning} /> : <Wheel round={round} spinning={spinning} rotation={rotation} />}</div>
             <div className="mt-7 text-center">
-              {!locked ? <button className="mx-auto flex w-full max-w-sm items-center justify-center gap-3 rounded-xl px-8 py-4 text-lg font-semibold shadow-[0_8px_25px_-10px_#087d6860] btn-primary" disabled={!ready || busy || !!storageError} onClick={startDraw}><Icon name="sparkle" size={24} /> Prepare the draw <Icon name="arrow" size={22} /></button> : allDone ? <a href="#winners" className="mx-auto flex w-full max-w-sm items-center justify-center gap-3 rounded-xl px-8 py-4 text-lg font-semibold btn-primary"><Icon name="trophy" size={24} /> See your winners <Icon name="arrow" size={22} /></a> : <button className="mx-auto flex w-full max-w-sm items-center justify-center gap-3 rounded-xl px-8 py-4 text-lg font-semibold shadow-[0_8px_25px_-10px_#087d6860] btn-primary" disabled={spinning || !!storageError} onClick={() => { if (showWinner) { setShowWinner(false); setRotation(0) } else spin() }}><Icon name="sparkle" size={24} /> {spinning ? 'Good luck, everyone…' : showWinner ? 'Next round' : `Spin round ${activeIndex + 1}`} {!spinning && <Icon name="arrow" size={22} />}</button>}
+              {!locked ? <button className="mx-auto flex w-full max-w-sm items-center justify-center gap-3 rounded-xl px-8 py-4 text-lg font-semibold shadow-[0_8px_25px_-10px_#087d6860] btn-primary" disabled={!ready || busy || !!storageError} onClick={startDraw}><Icon name="sparkle" size={24} /> Prepare the draw <Icon name="arrow" size={22} /></button> : allDone ? <a href="#winners" className="mx-auto flex w-full max-w-sm items-center justify-center gap-3 rounded-xl px-8 py-4 text-lg font-semibold btn-primary"><Icon name="trophy" size={24} /> See your winners <Icon name="arrow" size={22} /></a> : <button className="mx-auto flex w-full max-w-sm items-center justify-center gap-3 rounded-xl px-8 py-4 text-lg font-semibold shadow-[0_8px_25px_-10px_#c8202f60] btn-celebrate" disabled={drawing || !!storageError} onClick={() => { if (showWinner) { setShowWinner(false); setRotation(0) } else spin() }}><Icon name="sparkle" size={24} /> {spinning ? 'Good luck, everyone…' : showWinner ? 'Next round' : `Spin round ${activeIndex + 1}`} {!spinning && <Icon name="arrow" size={22} />}</button>}
               <p className="mt-4 text-sm text-muted">{allDone ? 'Thank you for being part of our story.' : !ready && !locked ? 'Your next celebration is being prepared.' : spinning ? 'The suspense is part of the fun.' : showWinner ? 'A special gift has found its person.' : locked ? `${round?.participants.length ?? 0} names. One special moment.` : `${state.gifts.length} gifts. ${state.gifts.length} moments to remember.`}</p>
             </div>
-            {recentWinner && <div className="mt-8 flex items-center gap-4 rounded-2xl border border-brand/25 bg-soft p-5 sm:p-6" role="status"><span className="grid size-14 shrink-0 place-items-center rounded-full bg-white text-brand"><Icon name="trophy" size={30} /></span><div className="min-w-0"><span className="text-xs font-bold tracking-widest text-brand">ROUND {completed} WINNER</span><h3 className="mt-2 font-heading text-[30px] leading-tight wrap-anywhere">{recentWinner.name}</h3><p className="mt-2 text-base text-muted">{state.gifts[completed - 1].name}</p><p className="mt-1 text-sm text-muted">Coupon {recentWinner.coupon}</p></div><span className="ml-auto hidden text-4xl text-accent sm:block">✦</span></div>}
+            {recentWinner && !stageOpen && <div className="mt-8 flex items-center gap-4 rounded-2xl border border-brand/25 bg-soft p-5 sm:p-6" role="status"><span className="grid size-14 shrink-0 place-items-center rounded-full bg-white text-brand"><Icon name="trophy" size={30} /></span><div className="min-w-0"><span className="text-xs font-bold tracking-widest text-brand">ROUND {completed} WINNER</span><h3 className="mt-2 font-heading text-[30px] leading-tight wrap-anywhere">{recentWinner.name}</h3><p className="mt-2 text-base text-muted">{state.gifts[completed - 1].name}</p><p className="mt-1 text-sm text-muted">Coupon {recentWinner.coupon}</p></div><span className="ml-auto hidden text-4xl text-masala sm:block">✦</span></div>}
           </section>
         </div>
       </> : <section>
-        <div className="mb-8 flex flex-wrap items-end justify-between gap-5"><div><span className="text-xs font-bold tracking-[.2em] text-brand">THE WINNER’S CIRCLE</span><h1 className="mt-3 font-heading text-4xl sm:text-5xl">Good luck looks good on them.</h1><p className="mt-4 text-lg text-muted">A little celebration for every lucky winner.</p></div><button className="flex items-center gap-2 rounded-xl px-5 py-3.5 text-base font-semibold btn-primary" disabled={!completed || spinning} onClick={() => download('fresh-masala-winners.csv', winnersCsv(state))}><Icon name="download" /> Export winners</button></div>
-        {completed && !spinning ? <div className="grid gap-5 md:grid-cols-2">{state.rounds.flatMap((r, i) => r.winner ? [<article className="flex items-center gap-5 rounded-2xl border border-line bg-white p-5 sm:p-7" key={r.giftId}><img src={state.gifts[i].image} alt={state.gifts[i].name} className="size-24 shrink-0 rounded-xl object-cover sm:size-32" /><div className="min-w-0"><span className="text-xs font-bold tracking-wider text-brand">ROUND {String(i + 1).padStart(2, '0')}</span><h2 className="mt-2 font-heading text-2xl wrap-anywhere sm:text-3xl">{r.winner.name}</h2><p className="mt-2 text-base font-semibold">{state.gifts[i].name}</p><p className="mt-3 text-sm text-muted">Coupon: {r.winner.coupon}</p><p className="mt-1 text-sm text-muted">Phone: {r.winner.phone}</p></div></article>] : [])}</div> : <div className="rounded-[24px] border border-line bg-white px-5 py-20 text-center"><span className="mx-auto grid size-20 place-items-center rounded-full bg-soft text-brand"><Icon name="trophy" size={40} /></span><h2 className="mt-6 font-heading text-3xl">{spinning ? 'A moment of suspense…' : 'Good luck is on its way.'}</h2><p className="mt-4 text-lg text-muted">Your winners will appear here after each round.</p><a href="#studio" className="mt-7 inline-flex items-center gap-2 rounded-xl border border-line px-5 py-3 text-base font-semibold text-brand">Back to draw studio <Icon name="arrow" /></a></div>}
+        <div className="mb-8 flex flex-wrap items-end justify-between gap-5"><div><span className="text-xs font-bold tracking-[.2em] text-brand">THE WINNER’S CIRCLE</span><h1 className="mt-3 font-heading text-4xl sm:text-5xl">Good luck looks good on them.</h1><p className="mt-4 text-lg text-muted">A little celebration for every lucky winner.</p></div><button className="flex items-center gap-2 rounded-xl px-5 py-3.5 text-base font-semibold btn-primary" disabled={!completed || drawing} onClick={() => download('fresh-masala-winners.csv', winnersCsv(state))}><Icon name="download" /> Export winners</button></div>
+        {completed && !drawing ? <div className="grid gap-5 md:grid-cols-2">{state.rounds.flatMap((r, i) => r.winner ? [<article className="flex items-center gap-5 rounded-2xl border border-line border-t-4 border-t-masala bg-white p-5 sm:p-7" key={r.giftId}><img src={state.gifts[i].image} alt={state.gifts[i].name} className="size-24 shrink-0 rounded-xl object-cover sm:size-32" /><div className="min-w-0"><span className="text-xs font-bold tracking-wider text-brand">ROUND {String(i + 1).padStart(2, '0')}</span><h2 className="mt-2 font-heading text-2xl wrap-anywhere sm:text-3xl">{r.winner.name}</h2><p className="mt-2 text-base font-semibold">{state.gifts[i].name}</p><p className="mt-3 text-sm text-muted">Coupon: {r.winner.coupon}</p><p className="mt-1 text-sm text-muted">Phone: {r.winner.phone}</p></div></article>] : [])}</div> : <div className="rounded-[24px] border border-line bg-white px-5 py-20 text-center"><span className="mx-auto grid size-20 place-items-center rounded-full bg-soft text-brand"><Icon name="trophy" size={40} /></span><h2 className="mt-6 font-heading text-3xl">{spinning ? 'A moment of suspense…' : 'Good luck is on its way.'}</h2><p className="mt-4 text-lg text-muted">Your winners will appear here after each round.</p><a href="#studio" className="mt-7 inline-flex items-center gap-2 rounded-xl border border-line px-5 py-3 text-base font-semibold text-brand">Back to draw studio <Icon name="arrow" /></a></div>}
       </section>}
+      <details className="mt-8 rounded-2xl border border-masala/20 bg-blush/60 p-5 sm:p-6">
+        <summary className="cursor-pointer text-base font-semibold text-masala">Reset & start over</summary>
+        <p className="mt-4 text-sm leading-relaxed text-muted">Reset individual parts or prepare a completely fresh celebration. Export winners before clearing them.</p>
+        <div className="mt-4 flex flex-wrap gap-3">{(['gifts', 'winners', 'participants', 'everything'] as const).map(part => <button key={part} className={`rounded-xl px-5 py-3 text-base font-semibold ${part === 'everything' ? 'btn-celebrate' : 'border border-masala/25 bg-white text-masala disabled:text-muted'}`} disabled={drawing || busy || !!storageError} onClick={() => reset(part)}>Reset {part}</button>)}</div>
+      </details>
       <footer className="mt-10 flex flex-col items-center justify-between gap-3 border-t border-line pt-6 text-sm text-muted sm:flex-row"><span>Fresh Masala · Made for moments worth celebrating.</span><span>Good taste. Great memories.</span></footer>
     </main>
 
+    {stageOpen && round && currentGift && <RevealStage round={round} gift={currentGift} number={activeIndex + 1} count={state.gifts.length} countdown={countdown} spinning={spinning} mode={mode} rotation={rotation} onClose={() => setStageOpen(false)} onNext={() => { setStageOpen(false); if (allDone) location.hash = 'winners'; else { setShowWinner(false); setRotation(0) } }} />}
     {toast && !editor && !privateOpen && <div role="status" className="fixed bottom-6 left-1/2 z-30 flex w-[90vw] max-w-xl -translate-x-1/2 items-center gap-3 rounded-xl bg-ink px-5 py-4 text-base text-white shadow-xl"><Icon name="sparkle" /><span className="flex-1">{toast}</span><button aria-label="Dismiss notification" onClick={() => setToast('')}><Icon name="close" /></button></div>}
-    {privateOpen && <PrivateSetup state={state} sizes={sizes} busy={busy} spinning={spinning} locked={locked} storageError={storageError} notice={privateNotice || toast} onClose={closePrivate} onUpload={(file, real) => void upload(file, real)} onTemplate={() => download('participants-template.csv', headers.join(',') + '\r\n')} onClear={() => { if (window.confirm('Remove display-only participants?')) commit({ ...state, fake: [] }) }} onReset={reset} onBackup={() => { try { const data = localStorage.getItem(storageKey); if (data) download('prize-mania-backup.json', data, 'application/json') } catch { setPrivateNotice('Storage is unavailable.') } }} onClearSaved={() => { if (window.confirm('Clear this browser’s entire saved draw?')) { try { localStorage.removeItem(storageKey); location.reload() } catch { setPrivateNotice('Storage is unavailable.') } } }} />}
+    {privateOpen && <PrivateSetup state={state} sizes={sizes} busy={busy} spinning={drawing} locked={locked} storageError={storageError} notice={privateNotice || toast} onClose={closePrivate} onUpload={(file, real) => void upload(file, real)} onTemplate={() => download('participants-template.csv', headers.join(',') + '\r\n')} onClear={() => { if (window.confirm('Remove display-only participants?')) commit({ ...state, fake: [] }) }} onReset={() => reset()} onBackup={() => { try { const data = localStorage.getItem(storageKey); if (data) download('prize-mania-backup.json', data, 'application/json') } catch { setPrivateNotice('Storage is unavailable.') } }} onClearSaved={() => { if (window.confirm('Clear this browser’s entire saved draw?')) { try { localStorage.removeItem(storageKey); location.reload() } catch { setPrivateNotice('Storage is unavailable.') } } }} />}
     {editor && <GiftEditor gift={editor} notice={toast} busy={busy} existing={state.gifts.some(g => g.id === editor.id)} onClose={() => setEditor(null)} onName={name => setEditor({ ...editor, name })} onImage={file => void setImage(file)} onSave={() => { if (!editor.name.trim()) { setToast('Give this gift a name.'); return } const exists = state.gifts.some(g => g.id === editor.id); if (commit({ ...state, gifts: exists ? state.gifts.map(g => g.id === editor.id ? { ...editor, name: editor.name.trim() } : g) : [...state.gifts, { ...editor, name: editor.name.trim() }] })) setEditor(null) }} onDelete={() => { if (window.confirm('Remove this gift and its planned round?') && commit({ ...state, gifts: state.gifts.filter(g => g.id !== editor.id) })) setEditor(null) }} />}
   </div>
+}
+
+function RevealStage({ round, gift, number, count, countdown, spinning, mode, rotation, onClose, onNext }: { round: Round; gift: Gift; number: number; count: number; countdown: number | null; spinning: boolean; mode: 'cylinder' | 'wheel'; rotation: number; onClose: () => void; onNext: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null)
+  const [fullscreenError, setFullscreenError] = useState('')
+  const drawing = spinning || countdown !== null
+  useEffect(() => { dialog.current?.showModal() }, [])
+  async function fullscreen() {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen()
+      else {
+        await document.documentElement.requestFullscreen()
+        // Reopen above the fullscreen element in the browser’s top layer.
+        dialog.current?.close(); dialog.current?.showModal()
+      }
+      setFullscreenError('')
+    } catch { setFullscreenError('Fullscreen is unavailable. The reveal still fills your browser window.') }
+  }
+  function finish(next: boolean) {
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
+    if (next) onNext(); else onClose()
+  }
+  return <dialog ref={dialog} aria-labelledby="reveal-title" onCancel={e => { e.preventDefault(); if (!drawing) finish(false) }} className="fixed inset-0 m-0 h-dvh max-h-none w-screen max-w-none overflow-y-auto overscroll-contain border-0 bg-brand-dark bg-[radial-gradient(ellipse_at_top_right,#c8202f55,transparent_55%),radial-gradient(ellipse_at_bottom_left,#0da48780,transparent_60%)] p-5 text-white backdrop:bg-brand-dark sm:p-8 lg:p-10">
+    {!drawing && <div className="pointer-events-none fixed inset-0 overflow-hidden" aria-hidden="true">{Array.from({ length: 48 }, (_, i) => <span key={i} className="absolute -top-6 h-5 w-2 animate-confetti motion-reduce:hidden" style={{ left: `${(i * 37) % 100}%`, backgroundColor: ['#ff5364', '#59e1c1', '#ffe29b', '#ffffff'][i % 4], animationDelay: `${(i % 12) * -.4}s`, animationDuration: `${4 + i % 3}s` }} />)}</div>}
+    <div className="relative mx-auto flex min-h-full max-w-[1500px] flex-col">
+      <header className="flex flex-wrap items-center justify-between gap-4"><img src="/brand/fresh-masala-logo.png" alt="Fresh Masala" className="h-20 w-40 rounded-2xl bg-cream object-contain sm:h-24 sm:w-48" /><span className="rounded-full border border-white/25 bg-white/10 px-5 py-3 text-sm font-bold tracking-[.15em]">ROUND {String(number).padStart(2, '0')} / {String(count).padStart(2, '0')}</span><div className="flex gap-3"><button onClick={() => void fullscreen()} className="rounded-xl border border-white/40 bg-white/10 px-4 py-3 text-sm font-semibold">Fullscreen</button>{!drawing && <button onClick={() => finish(false)} aria-label="Close reveal" className="rounded-xl border border-white/40 bg-white/10 p-3"><Icon name="close" /></button>}</div></header>
+      {fullscreenError && <p role="status" className="mt-3 text-sm">{fullscreenError}</p>}
+      <div className="grid flex-1 items-center gap-8 py-8 lg:grid-cols-[.7fr_1.3fr] lg:gap-16 lg:py-12">
+        <section className="mx-auto w-full max-w-sm text-center lg:max-w-lg"><span className="inline-flex items-center gap-2 rounded-full bg-masala px-5 py-2 text-sm font-bold tracking-widest"><Icon name="gift" /> UP FOR GRABS</span><div className="mt-5 overflow-hidden rounded-3xl border-4 border-white/20 bg-cream shadow-2xl"><img src={gift.image} alt={gift.name} className="h-40 w-full object-contain sm:h-56 lg:h-[330px]" /></div><h2 className="mt-5 font-heading text-2xl sm:text-3xl lg:text-4xl">{gift.name}</h2><p className="mt-3 text-base text-white/80">A little spice. A whole lot of happiness.</p></section>
+        <section className="min-w-0 text-center" aria-live="polite" aria-atomic="true">
+          {drawing ? <div className="relative">
+            <div className={countdown !== null ? 'invisible' : ''} aria-hidden={countdown !== null}>
+              <span className="mb-4 inline-flex rounded-full bg-masala px-5 py-2 text-sm font-bold tracking-[.15em]">THE LUCK IS ROLLING</span><h1 id={countdown === null ? 'reveal-title' : undefined} className="mb-6 font-heading text-3xl sm:text-5xl">Hold your breath…</h1>
+              {mode === 'cylinder' ? <Cylinder round={round} spinning={spinning} /> : <Wheel round={round} spinning={spinning} rotation={rotation} />}
+              <div className="mx-auto mt-6 h-1.5 max-w-xl overflow-hidden rounded-full bg-white/20" aria-hidden="true">{spinning && <div className="h-full animate-draw-progress rounded-full bg-[#ff5364]" />}</div><p className="mt-5 text-lg text-white/85">One name. One unforgettable moment.</p>
+            </div>
+            {countdown !== null && <div className="absolute inset-0 flex flex-col items-center justify-center"><p id="reveal-title" className="text-xl font-bold tracking-[.2em] sm:text-2xl">LET’S MAKE SOMEONE’S DAY!</p><div key={countdown} className="animate-countdown font-sans text-[150px] leading-tight font-bold text-cream motion-reduce:animate-none sm:text-[220px]">{countdown}</div><p className="text-xl text-white/85">Are you ready, everyone?</p></div>}
+          </div> : <div className="animate-reveal motion-reduce:animate-none"><span className="inline-flex items-center gap-2 rounded-full bg-masala px-6 py-3 text-base font-bold tracking-[.12em]"><Icon name="trophy" size={25} /> WE HAVE A WINNER!</span><p className="mt-7 font-heading text-2xl italic text-[#ffe29b] sm:text-3xl">Congratulations,</p><h1 id="reveal-title" className="mt-4 font-heading text-[clamp(2.75rem,6vw,6.5rem)] leading-[1.08] font-bold wrap-anywhere text-cream">{round.winner?.name}</h1><p className="mt-6 inline-block rounded-xl border border-white/25 bg-white/10 px-5 py-3 text-lg font-semibold wrap-anywhere">Coupon {round.winner?.coupon}</p><p className="mt-6 text-xl text-white/90 sm:text-2xl">Your lucky moment is here! <span aria-hidden="true">🎉</span></p><div className="mt-8 flex flex-wrap justify-center gap-4"><button onClick={() => finish(true)} className="flex items-center justify-center gap-3 rounded-xl px-8 py-4 text-lg font-bold btn-celebrate">{number === count ? 'See all winners' : 'Next round'} <Icon name="arrow" /></button><button onClick={() => finish(false)} className="rounded-xl border border-white/40 bg-white/10 px-6 py-4 text-lg font-semibold">Back to studio</button></div></div>}
+        </section>
+      </div>
+      <footer className="flex flex-wrap justify-between gap-3 border-t border-white/20 pt-5 text-sm font-semibold tracking-wide text-white/80"><span>FRESH MASALA · A CELEBRATION OF YOU</span><span>Good taste. Great memories. <span className="text-[#ff5364]">♥</span></span></footer>
+    </div>
+  </dialog>
 }
 
 function PrivateSetup({ state, sizes, busy, spinning, locked, storageError, notice, onClose, onUpload, onTemplate, onClear, onReset, onBackup, onClearSaved }: { state: DrawState; sizes: number[]; busy: boolean; spinning: boolean; locked: boolean; storageError: string; notice: string; onClose: () => void; onUpload: (file: File | undefined, real: boolean) => void; onTemplate: () => void; onClear: () => void; onReset: () => void; onBackup: () => void; onClearSaved: () => void }) {

@@ -4,6 +4,12 @@ export type Gift = { id: string; name: string; image: string }
 export type Round = { giftId: string; participants: Participant[]; winner?: Participant }
 export type DrawState = { real: Participant[]; fake: Participant[]; gifts: Gift[]; rounds: Round[] }
 export const storageKey = 'prize-mania-v1'
+export type ResetPart = 'winners' | 'gifts' | 'participants' | 'everything'
+
+export function resetDraw(state: DrawState, part: ResetPart, starterGifts: Gift[]): DrawState {
+  const clearPeople = part === 'participants' || part === 'everything'
+  return { real: clearPeople ? [] : state.real, fake: clearPeople ? [] : state.fake, gifts: part === 'gifts' || part === 'everything' ? starterGifts : state.gifts, rounds: [] }
+}
 
 export function csvRows(text: string): string[][] {
   const rows: string[][] = []; let row: string[] = []; let field = ''; let quoted = false; let closed = false
@@ -41,7 +47,7 @@ export function assertUnique(people: Participant[]) {
   const coupons = new Set<string>(); const phones = new Set<string>()
   for (const p of people) {
     if (!p.coupon.trim() || !p.name.trim() || !phoneKey(p)) throw new Error('Every participant needs a coupon code, name, and phone number.')
-    if (coupons.has(couponKey(p)) || phones.has(phoneKey(p))) throw new Error(`Duplicate or overlapping coupon / phone number: ${p.coupon}. No fake data was accepted.`)
+    if (coupons.has(couponKey(p)) || phones.has(phoneKey(p))) throw new Error(`Duplicate or overlapping coupon / phone number: ${p.coupon}. No data was accepted.`)
     coupons.add(couponKey(p)); phones.add(phoneKey(p))
   }
 }

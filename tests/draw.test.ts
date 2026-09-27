@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { csvRows, headers, parseParticipants, prepareRounds, randomIndex, roundSizes, selectWinner, validateState, winnersCsv } from '../src/draw'
+import { csvRows, headers, parseParticipants, prepareRounds, randomIndex, resetDraw, roundSizes, selectWinner, validateState, winnersCsv } from '../src/draw'
 import type { Participant } from '../src/draw'
 
 const people = (count: number, real: boolean): Participant[] => Array.from({ length: count }, (_, i) => ({ coupon: `${real ? 'R' : 'F'}-${i}`, name: `${real ? 'Real' : 'Display'} ${i}`, phone: `${real ? '98' : '97'}${String(i).padStart(8, '0')}`, week: '1', status: 'Activated', activated: '2026-09-01', real }))
@@ -81,4 +81,19 @@ test('winner export preserves columns, quotes names, and neutralizes spreadsheet
   expect(rows[0]).toEqual(['Round', 'Gift', ...headers])
   expect(rows[1][3]).toBe("'=DANGEROUS(\"x\")")
   expect(rows[1].length).toBe(8)
+})
+
+
+test('scoped resets clear results, retain the requested setup, and never mutate the saved draw', () => {
+  const real = people(4, true); const fake = people(6, false); const customGifts = gifts(2); const starterGifts = gifts(4)
+  const rounds = prepareRounds(real, fake, customGifts)
+  rounds[0].winner = selectWinner(rounds[0])
+  const state = { real, fake, gifts: customGifts, rounds }
+  const original = JSON.stringify(state)
+  expect(resetDraw(state, 'winners', starterGifts)).toEqual({ real, fake, gifts: customGifts, rounds: [] })
+  expect(resetDraw(state, 'gifts', starterGifts)).toEqual({ real, fake, gifts: starterGifts, rounds: [] })
+  expect(resetDraw(state, 'participants', starterGifts)).toEqual({ real: [], fake: [], gifts: customGifts, rounds: [] })
+  expect(resetDraw(state, 'everything', starterGifts)).toEqual({ real: [], fake: [], gifts: starterGifts, rounds: [] })
+  expect(JSON.stringify(state)).toBe(original)
+  for (const part of ['winners', 'gifts', 'participants', 'everything'] as const) expect(validateState(resetDraw(state, part, starterGifts)).rounds).toEqual([])
 })
