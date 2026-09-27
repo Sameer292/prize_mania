@@ -28,7 +28,9 @@ test('round sizes match examples, keep all entries, and never leave a singleton'
     expect(sizes.reduce((a, b) => a + b, 0)).toBe(total)
     expect(sizes.every(size => size >= 2)).toBe(true)
   }
-  expect(() => roundSizes(5, 3)).toThrow()
+  expect(roundSizes(5, 3)).toEqual([1, 1, 3])
+  expect(roundSizes(6, 5)).toEqual([1, 1, 1, 1, 2])
+  expect(() => roundSizes(3, 3)).toThrow()
 })
 
 test('random rounds use every participant once, preserve gift order, and only real people win', () => {

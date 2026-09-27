@@ -79,8 +79,8 @@ function shuffle<T>(items: T[]): T[] {
 }
 
 export function roundSizes(total: number, count: number): number[] {
-  if (count < 1 || total < count * 2) throw new Error('Add at least two participants per gift so no round has just one person.')
-  const target = Math.max(2, Math.round(total / count / 10) * 10)
+  if (count < 1 || total < count + 1) throw new Error('Add more participants: each gift needs a round and the last round needs at least two people.')
+  const target = Math.max(Math.min(2, Math.floor(total / count)), Math.round(total / count / 10) * 10)
   if (total - target * (count - 1) >= 2) return [...Array(count - 1).fill(target), total - target * (count - 1)]
   const base = Math.floor(total / count)
   return Array.from({ length: count }, (_, i) => base + (i >= count - total % count ? 1 : 0))
@@ -121,11 +121,12 @@ export function validateState(value: unknown): DrawState {
   if (state.rounds.length) {
     if (state.rounds.length !== state.gifts.length) throw new Error('Invalid saved rounds.')
     const assigned: Participant[] = []
+    const originals = new Map(people.map(p => [couponKey(p), JSON.stringify(p)]))
     let unfinished = false
     state.rounds.forEach((r, i) => {
-      if (r.giftId !== state.gifts[i].id || !Array.isArray(r.participants) || r.participants.length < 2 || !r.participants.some(p => p.real)) throw new Error('Invalid saved round.')
+      if (r.giftId !== state.gifts[i].id || !Array.isArray(r.participants) || r.participants.length < (i === state.rounds.length - 1 ? 2 : 1) || !r.participants.some(p => p.real)) throw new Error('Invalid saved round.')
       for (const p of r.participants) {
-        if (!people.some(original => JSON.stringify(original) === JSON.stringify(p))) throw new Error('Unknown saved participant.')
+        if (originals.get(couponKey(p)) !== JSON.stringify(p)) throw new Error('Unknown saved participant.')
         assigned.push(p)
       }
       if (r.winner && (unfinished || !r.winner.real || !r.participants.some(p => p.real && JSON.stringify(p) === JSON.stringify(r.winner)))) throw new Error('Invalid saved winner.')
