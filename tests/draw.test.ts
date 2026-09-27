@@ -11,10 +11,10 @@ describe('CSV import', () => {
     expect(parseParticipants(text, true)[0]).toEqual({ phone: '9800000000', name: 'Asha, "Lucky"\nSharma', coupon: 'R-1', activated: '2026-09-01', status: 'Activated', week: '2', real: true })
   })
   test('rejects empty, malformed, missing-header, duplicate and overlapping data', () => {
-    for (const text of ['', headers.join(','), 'Name,Phone\nA,98', headers.join(',') + '\n"unclosed', headers.join(',') + '\nR,A,98,1,x', headers.join(',') + '\nR,A,98,1,x,date\nR,B,99,1,x,date', headers.join(',') + '\nR,A,+98-000,1,x,date\nS,B,98000,1,x,date']) expect(() => parseParticipants(text, false)).toThrow()
+    for (const text of ['', headers.join(','), 'Name,Phone\nA,98', headers.join(',') + '\n"unclosed', headers.join(',') + '\nR,A,98,1,x', headers.join(',') + '\nR,A,98,1,x,date\nR,B,99,1,x,date', headers.join(',') + '\nR,A,+98-000,1,x,date\n r ,B,99000,1,x,date']) expect(() => parseParticipants(text, false)).toThrow()
     expect(() => csvRows('"x"oops,y')).toThrow()
     expect(() => prepareRounds(people(3, true), [{ ...people(1, false)[0], coupon: 'r-0' }], gifts(1))).toThrow()
-    expect(() => prepareRounds(people(3, true), [{ ...people(1, false)[0], phone: '+98 00000000' }], gifts(1))).toThrow()
+    expect(() => prepareRounds(people(3, true), [{ ...people(1, false)[0], phone: '+98 00000000' }], gifts(1))).not.toThrow()
   })
 })
 
@@ -96,4 +96,17 @@ test('scoped resets clear results, retain the requested setup, and never mutate 
   expect(resetDraw(state, 'everything', starterGifts)).toEqual({ real: [], fake: [], gifts: starterGifts, rounds: [] })
   expect(JSON.stringify(state)).toBe(original)
   for (const part of ['winners', 'gifts', 'participants', 'everything'] as const) expect(validateState(resetDraw(state, part, starterGifts)).rounds).toEqual([])
+})
+
+
+test('repeated phones are accepted within and across lists, saved rounds, and real-only winners', () => {
+  const real = parseParticipants(headers.join(',') + '\nR-1,Asha,9800000000,1,Activated,date\nR-2,Sita,9800000000,1,Activated,date', true)
+  const fake = parseParticipants(headers.join(',') + '\nF-1,Anita,+98 00000000,1,Activated,date\nF-2,Kiran,009800000000,1,Activated,date', false)
+  const giftList = gifts(2)
+  const rounds = prepareRounds(real, fake, giftList)
+  rounds.forEach(round => { round.winner = selectWinner(round); expect(round.winner.real).toBe(true) })
+  expect(new Set(rounds.flatMap(round => round.participants.map(person => person.coupon))).size).toBe(4)
+  const state = { real, fake, gifts: giftList, rounds }
+  expect(validateState(JSON.parse(JSON.stringify(state)))).toEqual(state)
+  expect(() => prepareRounds(real, [{ ...fake[0], coupon: ' r-1 ' }], giftList)).toThrow('coupon code')
 })

@@ -42,13 +42,12 @@ export function csvRows(text: string): string[][] {
 }
 
 const couponKey = (p: Participant) => p.coupon.trim().toLowerCase()
-const phoneKey = (p: Participant) => p.phone.replace(/\D/g, '').replace(/^00/, '')
 export function assertUnique(people: Participant[]) {
-  const coupons = new Set<string>(); const phones = new Set<string>()
+  const coupons = new Set<string>()
   for (const p of people) {
-    if (!p.coupon.trim() || !p.name.trim() || !phoneKey(p)) throw new Error('Every participant needs a coupon code, name, and phone number.')
-    if (coupons.has(couponKey(p)) || phones.has(phoneKey(p))) throw new Error(`Duplicate or overlapping coupon / phone number: ${p.coupon}. No data was accepted.`)
-    coupons.add(couponKey(p)); phones.add(phoneKey(p))
+    if (!p.coupon.trim() || !p.name.trim() || !p.phone.replace(/\D/g, '').replace(/^00/, '')) throw new Error('Every participant needs a coupon code, name, and phone number.')
+    if (coupons.has(couponKey(p))) throw new Error(`Duplicate or overlapping coupon code: ${p.coupon}. No data was accepted.`)
+    coupons.add(couponKey(p))
   }
 }
 

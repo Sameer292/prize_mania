@@ -23,7 +23,7 @@ Coupon code,Participant name,Phone number,week number,status,Activated at
 REAL-001,Asha Sharma,9800000001,1,Activated,2026-09-01
 ```
 
-All uploaded real entries are eligible, regardless of status or week. Duplicate coupon codes (ignoring case/outer spaces) or phone numbers (ignoring formatting and normalizing international 00 prefixes) are rejected. Fake imports that overlap the real list are rejected in full, leaving existing data unchanged. Replacing the real list with overlapping data removes the old display-only list; its operator notice stays in `/#private`. Public import messages never mention it.
+All uploaded real entries are eligible, regardless of status or week. Duplicate coupon codes (ignoring case/outer spaces) are rejected across both lists. Repeated phone numbers are allowed. Fake imports with coupon codes that overlap the real list are rejected in full, leaving existing data unchanged. Replacing the real list with overlapping data removes the old display-only list; its operator notice stays in `/#private`. Public import messages never mention it.
 
 The expandable **Reset & start over** panel offers separate resets for gifts, winners, participants, and everything. Every reset asks for confirmation. Gifts restore the four starter prizes; winners clear the round assignments; participants clear both lists. Changing gifts or participants also clears existing rounds and winners. Reset everything clears both lists and results and restores starter gifts. Export winners before resetting.
 
