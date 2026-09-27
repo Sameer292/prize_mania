@@ -17,6 +17,10 @@
 
 @layer base {
   body { @apply m-0 bg-paper font-sans text-base text-ink antialiased; }
-  button { @apply cursor-pointer transition disabled:cursor-not-allowed disabled:opacity-40; }
+  button { @apply cursor-pointer transition disabled:cursor-not-allowed; }
   button, a, input { @apply focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-brand; }
+}
+
+@utility btn-primary {
+  @apply bg-brand text-white hover:bg-brand-dark disabled:bg-[#e0e8e3] disabled:text-[#40554a] disabled:opacity-100 disabled:shadow-none;
 }
