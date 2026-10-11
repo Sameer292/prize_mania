@@ -1,14 +1,40 @@
 export const headers = ['Coupon code', 'Participant name', 'Phone number', 'week number', 'status', 'Activated at']
 export type Participant = { coupon: string; name: string; phone: string; week: string; status: string; activated: string; real: boolean }
-export type Gift = { id: string; name: string; image: string }
-export type Round = { giftId: string; participants: Participant[]; winner?: Participant }
+export type Gift = { id: string; code: string; name: string; image: string; customWinnerCoupon?: string }
+export type Round = { giftId: string; participants: Participant[]; winner?: Participant; customWinnerCoupon?: string }
 export type DrawState = { real: Participant[]; fake: Participant[]; gifts: Gift[]; rounds: Round[] }
 export const storageKey = 'prize-mania-v1'
 export type ResetPart = 'winners' | 'gifts' | 'participants' | 'everything'
 
+export function createGiftCode(gifts: Gift[]): string {
+  const used = new Set(gifts.map(g => g.code.toUpperCase()))
+  let code: string
+  do { code = `PRIZE-${crypto.randomUUID().slice(0, 8).toUpperCase()}` } while (used.has(code))
+  return code
+}
+
+// Older saved draws have IDs but no public prize codes. Upgrade them without
+// changing IDs, assignments or outcomes, using repeatable codes until saved.
+function restoreGiftCodes(gifts: Gift[]): Gift[] {
+  const used = new Set<string>()
+  for (const gift of gifts) {
+    if (gift.code === undefined) continue
+    if (typeof gift.code !== 'string' || !gift.code.trim() || gift.code !== gift.code.trim() || used.has(gift.code.toUpperCase())) throw new Error('Invalid or duplicate saved prize code.')
+    used.add(gift.code.toUpperCase())
+  }
+  let next = 1
+  return gifts.map(gift => {
+    if (gift.code !== undefined) return gift
+    let code: string
+    do { code = `PRIZE-${String(next++).padStart(4, '0')}` } while (used.has(code))
+    used.add(code)
+    return { ...gift, code }
+  })
+}
+
 export function resetDraw(state: DrawState, part: ResetPart, starterGifts: Gift[]): DrawState {
   const clearPeople = part === 'participants' || part === 'everything'
-  return { real: clearPeople ? [] : state.real, fake: clearPeople ? [] : state.fake, gifts: part === 'gifts' || part === 'everything' ? starterGifts : state.gifts, rounds: [] }
+  return { real: clearPeople ? [] : state.real, fake: clearPeople ? [] : state.fake, gifts: part === 'gifts' || part === 'everything' ? starterGifts : clearPeople ? reconcileCustomWinners(state.gifts, []) : state.gifts, rounds: [] }
 }
 
 export function csvRows(text: string): string[][] {
@@ -41,7 +67,42 @@ export function csvRows(text: string): string[][] {
   return rows
 }
 
-const couponKey = (p: Participant) => p.coupon.trim().toLowerCase()
+const normalizeCoupon = (coupon: string) => coupon.trim().toLowerCase()
+const couponKey = (p: Participant) => normalizeCoupon(p.coupon)
+
+function customWinners(real: Participant[], gifts: Gift[]): Map<string, Participant> {
+  const entrants = new Map(real.filter(p => p.real).map(p => [couponKey(p), p]))
+  const assigned = new Set<string>()
+  const winners = new Map<string, Participant>()
+  for (const gift of gifts) {
+    if (gift.customWinnerCoupon === undefined) continue
+    if (typeof gift.customWinnerCoupon !== 'string' || !gift.customWinnerCoupon.trim()) throw new Error('Invalid custom winner coupon.')
+    const coupon = normalizeCoupon(gift.customWinnerCoupon)
+    const person = entrants.get(coupon)
+    if (!person) throw new Error(`Coupon ${gift.customWinnerCoupon} is not in the real participant list.`)
+    if (assigned.has(coupon)) throw new Error(`Coupon ${person.coupon} is already assigned to another prize.`)
+    assigned.add(coupon)
+    winners.set(gift.id, person)
+  }
+  return winners
+}
+
+export function setCustomWinner(state: DrawState, prizeCode: string, coupon: string): DrawState {
+  if (state.rounds.length) throw new Error('Reset the draw before changing custom winners.')
+  const gift = state.gifts.find(g => g.code.toUpperCase() === prizeCode.trim().toUpperCase())
+  if (!gift) throw new Error('This prize no longer exists. Add gifts before assigning winners.')
+  const person = coupon.trim() ? state.real.find(p => p.real && couponKey(p) === normalizeCoupon(coupon)) : undefined
+  if (coupon.trim() && !person) throw new Error(`Coupon ${coupon.trim()} is not in the real participant list.`)
+  const gifts = state.gifts.map(g => g.id === gift.id ? { ...g, customWinnerCoupon: person?.coupon } : g)
+  customWinners(state.real, gifts)
+  return { ...state, gifts }
+}
+
+export function reconcileCustomWinners(gifts: Gift[], real: Participant[]): Gift[] {
+  const coupons = new Set(real.map(couponKey))
+  return gifts.map(g => g.customWinnerCoupon !== undefined && !coupons.has(normalizeCoupon(g.customWinnerCoupon)) ? { ...g, customWinnerCoupon: undefined } : g)
+}
+
 export function assertUnique(people: Participant[]) {
   const coupons = new Set<string>()
   for (const p of people) {
@@ -95,19 +156,30 @@ export function prepareRounds(real: Participant[], fake: Participant[], gifts: G
   if (real.length < gifts.length) throw new Error('You need at least one real participant for every gift.')
   if (gifts.some(g => !g.name.trim() || !g.image)) throw new Error('Give every gift a name and an image.')
   assertUnique([...real, ...fake])
+  const planned = customWinners(real, gifts)
   const sizes = roundSizes(real.length + fake.length, gifts.length)
-  const eligible = shuffle(real)
-  const pool = shuffle([...eligible.slice(gifts.length), ...fake])
+  const reserved = new Set([...planned.values()].map(couponKey))
+  const eligible = shuffle(real.filter(p => !reserved.has(couponKey(p))))
+  let nextEligible = 0
+  const anchors = gifts.map(g => planned.get(g.id) || eligible[nextEligible++])
+  const pool = shuffle([...eligible.slice(nextEligible), ...fake])
   let offset = 0
   return gifts.map((gift, i) => {
-    const participants = shuffle([eligible[i], ...pool.slice(offset, offset + sizes[i] - 1)])
+    const participants = shuffle([anchors[i], ...pool.slice(offset, offset + sizes[i] - 1)])
     offset += sizes[i] - 1
-    return { giftId: gift.id, participants }
+    const customWinner = planned.get(gift.id)
+    return { giftId: gift.id, participants, ...(customWinner ? { customWinnerCoupon: customWinner.coupon } : {}) }
   })
 }
 
 export function selectWinner(round: Round): Participant {
   if (round.winner) throw new Error('This round already has a winner.')
+  if (round.customWinnerCoupon !== undefined) {
+    const coupon = normalizeCoupon(round.customWinnerCoupon)
+    const winner = round.participants.find(p => p.real && couponKey(p) === coupon)
+    if (!winner) throw new Error('The custom winner must be a real participant in this round.')
+    return winner
+  }
   const eligible = round.participants.filter(p => p.real)
   return eligible[randomIndex(eligible.length)]
 }
@@ -123,6 +195,8 @@ export function validateState(value: unknown): DrawState {
   if (state.real.some(p => p.real !== true) || state.fake.some(p => p.real !== false)) throw new Error('Invalid participant eligibility.')
   assertUnique(people)
   if (new Set(state.gifts.map(g => g.id)).size !== state.gifts.length || state.gifts.some(g => !g || typeof g.id !== 'string' || typeof g.name !== 'string' || typeof g.image !== 'string' || !g.image.startsWith('data:image/'))) throw new Error('Invalid saved gifts.')
+  const gifts = restoreGiftCodes(state.gifts)
+  const planned = customWinners(state.real, state.gifts)
   if (state.rounds.length) {
     if (state.rounds.length !== state.gifts.length) throw new Error('Invalid saved rounds.')
     const assigned: Participant[] = []
@@ -130,17 +204,20 @@ export function validateState(value: unknown): DrawState {
     let unfinished = false
     state.rounds.forEach((r, i) => {
       if (r.giftId !== state.gifts[i].id || !Array.isArray(r.participants) || r.participants.length < (i === state.rounds.length - 1 ? 2 : 1) || !r.participants.some(p => p.real)) throw new Error('Invalid saved round.')
+      const customWinner = planned.get(r.giftId)
+      if (r.customWinnerCoupon !== customWinner?.coupon || (customWinner && !r.participants.some(p => p.real && couponKey(p) === couponKey(customWinner)))) throw new Error('Invalid saved custom winner assignment.')
       for (const p of r.participants) {
         if (originals.get(couponKey(p)) !== JSON.stringify(p)) throw new Error('Unknown saved participant.')
         assigned.push(p)
       }
       if (r.winner && (unfinished || !r.winner.real || !r.participants.some(p => p.real && JSON.stringify(p) === JSON.stringify(r.winner)))) throw new Error('Invalid saved winner.')
+      if (r.winner && customWinner && couponKey(r.winner) !== couponKey(customWinner)) throw new Error('Saved winner does not match the custom winner.')
       if (!r.winner) unfinished = true
     })
     assertUnique(assigned)
     if (assigned.length !== people.length) throw new Error('Saved draw is missing participants.')
   }
-  return state
+  return { ...state, gifts }
 }
 
 export function winnersCsv(state: DrawState) {

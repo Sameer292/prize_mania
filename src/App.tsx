@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { assertUnique, headers, parseParticipants, prepareRounds, randomIndex, resetDraw, roundSizes, selectWinner, storageKey, validateState, winnersCsv } from './draw'
+import { assertUnique, createGiftCode, headers, parseParticipants, prepareRounds, randomIndex, reconcileCustomWinners, resetDraw, roundSizes, selectWinner, setCustomWinner, storageKey, validateState, winnersCsv } from './draw'
 import type { DrawState, Gift, ResetPart, Round } from './draw'
 import { Cylinder, Wheel, spinDuration } from './Selector'
+import { SeedSetup } from './SeedSetup'
+import type { WinnerSaveResult } from './CustomWinners'
 
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const paths: Record<string, string> = {
@@ -32,10 +34,10 @@ function giftImage(kind: string, color: string) {
   return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 180"><rect width="220" height="180" rx="12" fill="${color}"/><ellipse cx="110" cy="160" rx="57" ry="8" fill="#000" opacity=".07"/>${art[kind] || art.gift}</svg>`)
 }
 const initialGifts: Gift[] = [
-  { id: 'headphones', name: 'Wireless headphones', image: giftImage('headphones', '#efe8da') },
-  { id: 'watch', name: 'Smart watch', image: giftImage('watch', '#e9eee6') },
-  { id: 'speaker', name: 'Bluetooth speaker', image: giftImage('speaker', '#e5eee9') },
-  { id: 'gift', name: 'Surprise gift box', image: giftImage('gift', '#f5e8d5') },
+  { id: 'headphones', code: 'PRIZE-0001', name: 'Wireless headphones', image: giftImage('headphones', '#efe8da') },
+  { id: 'watch', code: 'PRIZE-0002', name: 'Smart watch', image: giftImage('watch', '#e9eee6') },
+  { id: 'speaker', code: 'PRIZE-0003', name: 'Bluetooth speaker', image: giftImage('speaker', '#e5eee9') },
+  { id: 'gift', code: 'PRIZE-0004', name: 'Surprise gift box', image: giftImage('gift', '#f5e8d5') },
 ]
 const emptyState: DrawState = { real: [], fake: [], gifts: initialGifts, rounds: [] }
 
@@ -60,6 +62,8 @@ function App() {
   const [page, setPage] = useState(location.hash === '#winners' ? 'winners' : 'studio')
   const [privateOpen, setPrivateOpen] = useState(location.hash === '#private')
   const [privateNotice, setPrivateNotice] = useState('')
+  const [seedOpen, setSeedOpen] = useState(location.hash === '#seed')
+  const [seedNotice, setSeedNotice] = useState('')
   const [mode, setMode] = useState<'cylinder' | 'wheel'>('cylinder')
   const [previewGiftId, setPreviewGiftId] = useState('')
   const [toast, setToast] = useState('')
@@ -104,15 +108,16 @@ function App() {
   useEffect(() => {
     const onHash = () => {
       setPrivateOpen(location.hash === '#private')
+      setSeedOpen(location.hash === '#seed')
       if (location.hash === '#winners') setPage('winners')
-      else if (location.hash !== '#private') setPage('studio')
+      else if (!['#private', '#seed'].includes(location.hash)) setPage('studio')
       setToast('')
     }
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
 
-  function commit(next: DrawState) {
+  function commit(next: DrawState, onError?: (message: string) => void) {
     try {
       if (storageError) throw new Error(storageError)
       if (localStorage.getItem(storageKey) !== saved.current) throw new Error('This draw changed in another tab. Reload before continuing.')
@@ -122,9 +127,11 @@ function App() {
       setState(next)
       return true
     } catch (error) {
-      setToast(error instanceof DOMException && error.name === 'QuotaExceededError'
+      const message = error instanceof DOMException && error.name === 'QuotaExceededError'
         ? 'This browser’s storage is full. Use smaller gift images and try again. Your previous draw is unchanged.'
-        : error instanceof Error ? error.message : 'Could not save. Your previous draw is unchanged.')
+        : error instanceof Error ? error.message : 'Could not save. Your previous draw is unchanged.'
+      if (onError) onError(message)
+      else setToast(message)
       return false
     }
   }
@@ -140,10 +147,13 @@ function App() {
       if (real) {
         try { assertUnique([...people, ...fake]) } catch { fake = []; removed = true }
       } else assertUnique([...state.real, ...people])
-      if (commit({ ...state, real: real ? people : state.real, fake })) {
+      const gifts = real ? reconcileCustomWinners(state.gifts, people) : state.gifts
+      const clearedAssignments = gifts.some((g, i) => g.customWinnerCoupon !== state.gifts[i].customWinnerCoupon)
+      if (commit({ ...state, real: real ? people : state.real, fake, gifts })) {
         if (real) setToast(`${people.length} participants added. You’re ready to plan their lucky moment.`)
         else setPrivateNotice(`${people.length} display-only participants imported successfully.`)
         if (removed) setPrivateNotice('The real list was replaced. Overlapping display-only entries were removed; upload a non-overlapping CSV here.')
+        if (clearedAssignments) setSeedNotice('The real list was replaced. Custom winner assignments for coupons no longer in the list were cleared. Review the remaining assignments before preparing the draw.')
       }
     } catch (error) { (real ? setToast : setPrivateNotice)((error as Error).message) }
     finally { inFlight.current = false; setBusy(false) }
@@ -154,6 +164,17 @@ function App() {
       const rounds = prepareRounds(state.real, state.fake, state.gifts)
       if (commit({ ...state, rounds })) { setShowWinner(false); setRotation(0); setPage('studio'); setToast('Rounds are ready. Participants are shuffled and assigned once.') }
     } catch (error) { setToast((error as Error).message) }
+  }
+
+  function saveCustomWinner(prizeCode: string, coupon: string): WinnerSaveResult {
+    setToast(''); setSeedNotice('')
+    try {
+      const next = setCustomWinner(state, prizeCode, coupon)
+      let saveError = 'Could not save. Your previous setup is unchanged.'
+      if (!commit(next, message => { saveError = message })) return { ok: false, error: saveError }
+      const gift = next.gifts.find(g => g.code.toUpperCase() === prizeCode.trim().toUpperCase())!
+      return { ok: true, coupon: gift.customWinnerCoupon || '' }
+    } catch (error) { return { ok: false, error: error instanceof Error ? error.message : 'Could not save. Please try again.' } }
   }
 
   function spin() {
@@ -187,10 +208,10 @@ function App() {
   function reset(part: ResetPart = 'winners') {
     if (drawing || busy) return
     const messages = {
-      winners: 'Clear all winners and round assignments? Your participants and gifts will stay. Export winners first if you need them.',
-      gifts: 'Restore the four starter gifts? All custom gift names and images will be removed. Any rounds and winners will also be cleared. Participants will stay.',
-      participants: 'Remove all participants? Any rounds and winners will also be cleared. Gifts will stay.',
-      everything: 'Reset everything in this browser? All participants, rounds, winners and custom gifts will be removed. The four starter gifts will be restored.',
+      winners: 'Clear all winners and round assignments? Your participants, gifts and custom winner settings will stay. Export winners first if you need them.',
+      gifts: 'Restore the four starter gifts? All custom gift names, images and custom winner settings will be removed. Any rounds and winners will also be cleared. Participants will stay.',
+      participants: 'Remove all participants? Any rounds, winners and custom winner settings will also be cleared. Gifts will stay.',
+      everything: 'Reset everything in this browser? All participants, rounds, winners, custom winner settings and custom gifts will be removed. The four starter gifts will be restored.',
     }
     if (!window.confirm(messages[part])) return
     const next = resetDraw(state, part, initialGifts)
@@ -217,6 +238,12 @@ function App() {
   function closePrivate() {
     if (busy) return
     setToast(''); setPrivateNotice(''); setPrivateOpen(false)
+    history.replaceState(null, '', location.pathname + location.search)
+  }
+
+  function closeSeed() {
+    if (busy) return
+    setToast(''); setSeedNotice(''); setSeedOpen(false)
     history.replaceState(null, '', location.pathname + location.search)
   }
 
@@ -261,7 +288,7 @@ function App() {
           <div className="flex flex-wrap items-center justify-between gap-5"><div><span className="text-xs font-bold tracking-[.18em] text-masala">THE PEOPLE BEHIND THE MOMENT</span><h2 className="mt-2 font-heading text-3xl">{total > 0 ? 'Manage your participants.' : 'Add your participants.'}</h2><p className="mt-2 text-base text-muted">{locked ? `${total} participants registered. The list is locked for this draw.` : total > 0 ? `${total} participants registered. Your list is ready for the draw.` : '0 participants registered. Upload your CSV to get started.'}</p></div><div className="flex flex-wrap items-center gap-3">
             {!locked && <label className={`relative flex items-center gap-2 rounded-xl px-6 py-4 text-base font-semibold focus-within:outline-2 focus-within:outline-offset-3 focus-within:outline-brand ${busy || storageError ? 'pointer-events-none bg-[#e0e8e3] text-[#40554a]' : 'btn-primary cursor-pointer'}`}><Icon name="upload" /> {busy ? 'Reading file…' : state.real.length ? 'Replace participant CSV' : 'Upload participants CSV'}<input type="file" accept=".csv,text/csv" aria-label="Upload real participants CSV" className="sr-only" disabled={locked || busy || !!storageError} onChange={e => { void upload(e.target.files?.[0], true); e.target.value = '' }} /></label>}
             <button className="flex items-center gap-2 rounded-xl border border-line px-4 py-3 text-base font-semibold text-brand" onClick={() => download('participants-template.csv', headers.join(',') + '\r\n')}><Icon name="download" /> CSV template</button>
-            {!locked && state.real.length > 0 && <button className="px-3 py-3 text-sm font-semibold text-masala" disabled={busy || !!storageError} onClick={() => { if (window.confirm('Remove registered participants?')) commit({ ...state, real: [] }) }}>Clear participants</button>}
+            {!locked && state.real.length > 0 && <button className="px-3 py-3 text-sm font-semibold text-masala" disabled={busy || !!storageError} onClick={() => { if (window.confirm('Remove registered participants and their custom winner settings?')) commit({ ...state, real: [], gifts: reconcileCustomWinners(state.gifts, []) }) }}>Clear participants</button>}
           </div></div>
           {!locked && <p className="mt-4 text-sm leading-relaxed text-muted">CSV up to 3 MB · Coupon code, Participant name, Phone number, week number, status, Activated at. Each upload replaces the current list.</p>}
         </section>
@@ -270,7 +297,7 @@ function App() {
 
         <div className="grid items-start gap-7 lg:grid-cols-[minmax(0,.85fr)_minmax(0,1.15fr)]">
           <section className="rounded-[24px] border border-line bg-white p-6 sm:p-8" aria-label="Gift lineup">
-            <div className="mb-6 flex items-start justify-between gap-3"><div><span className="text-xs font-bold tracking-[.18em] text-masala">THE GIFT LINEUP</span><h2 className="mt-2 font-heading text-[30px]">Something to smile about.</h2></div>{!locked && <button className="grid size-11 shrink-0 place-items-center rounded-xl border border-line text-brand hover:bg-soft" aria-label="Add gift" disabled={busy || !!storageError} onClick={() => openEditor({ id: crypto.randomUUID(), name: '', image: giftImage('gift', '#edf5ee') })}><Icon name="plus" size={22} /></button>}</div>
+            <div className="mb-6 flex items-start justify-between gap-3"><div><span className="text-xs font-bold tracking-[.18em] text-masala">THE GIFT LINEUP</span><h2 className="mt-2 font-heading text-[30px]">Something to smile about.</h2></div>{!locked && <button className="grid size-11 shrink-0 place-items-center rounded-xl border border-line text-brand hover:bg-soft" aria-label="Add gift" disabled={busy || !!storageError} onClick={() => openEditor({ id: crypto.randomUUID(), code: createGiftCode(state.gifts), name: '', image: giftImage('gift', '#edf5ee') })}><Icon name="plus" size={22} /></button>}</div>
 
             {previewGift ? <article className="mb-6 overflow-hidden rounded-2xl border border-line">
               <div className="relative flex h-[270px] items-center justify-center bg-cream sm:h-[300px]">
@@ -312,7 +339,8 @@ function App() {
     </main>
 
     {stageOpen && round && currentGift && <RevealStage round={round} gift={currentGift} number={activeIndex + 1} count={state.gifts.length} countdown={countdown} spinning={spinning} mode={mode} rotation={rotation} onClose={() => setStageOpen(false)} onNext={() => { setStageOpen(false); if (allDone) location.hash = 'winners'; else { setShowWinner(false); setRotation(0) } }} />}
-    {toast && !editor && !privateOpen && <div role="status" className="fixed bottom-6 left-1/2 z-30 flex w-[90vw] max-w-xl -translate-x-1/2 items-center gap-3 rounded-xl bg-ink px-5 py-4 text-base text-white shadow-xl"><Icon name="sparkle" /><span className="flex-1">{toast}</span><button aria-label="Dismiss notification" onClick={() => setToast('')}><Icon name="close" /></button></div>}
+    {toast && !editor && !privateOpen && !seedOpen && <div role="status" className="fixed bottom-6 left-1/2 z-30 flex w-[90vw] max-w-xl -translate-x-1/2 items-center gap-3 rounded-xl bg-ink px-5 py-4 text-base text-white shadow-xl"><Icon name="sparkle" /><span className="flex-1">{toast}</span><button aria-label="Dismiss notification" onClick={() => setToast('')}><Icon name="close" /></button></div>}
+    {seedOpen && <SeedSetup state={state} disabled={locked || busy || !!storageError || drawing} busy={busy} notice={seedNotice} storageError={storageError} onClose={closeSeed} onSave={saveCustomWinner} />}
     {privateOpen && <PrivateSetup state={state} sizes={sizes} busy={busy} spinning={drawing} locked={locked} storageError={storageError} notice={privateNotice || toast} onClose={closePrivate} onUpload={(file, real) => void upload(file, real)} onTemplate={() => download('participants-template.csv', headers.join(',') + '\r\n')} onClear={() => { if (window.confirm('Remove display-only participants?')) commit({ ...state, fake: [] }) }} onReset={() => reset()} onBackup={() => { try { const data = localStorage.getItem(storageKey); if (data) download('prize-mania-backup.json', data, 'application/json') } catch { setPrivateNotice('Storage is unavailable.') } }} onClearSaved={() => { if (window.confirm('Clear this browser’s entire saved draw?')) { try { localStorage.removeItem(storageKey); location.reload() } catch { setPrivateNotice('Storage is unavailable.') } } }} />}
     {editor && <GiftEditor gift={editor} notice={toast} busy={busy} existing={state.gifts.some(g => g.id === editor.id)} onClose={() => setEditor(null)} onName={name => setEditor({ ...editor, name })} onImage={file => void setImage(file)} onSave={() => { if (!editor.name.trim()) { setToast('Give this gift a name.'); return } const exists = state.gifts.some(g => g.id === editor.id); if (commit({ ...state, gifts: exists ? state.gifts.map(g => g.id === editor.id ? { ...editor, name: editor.name.trim() } : g) : [...state.gifts, { ...editor, name: editor.name.trim() }] })) setEditor(null) }} onDelete={() => { if (window.confirm('Remove this gift and its planned round?') && commit({ ...state, gifts: state.gifts.filter(g => g.id !== editor.id) })) setEditor(null) }} />}
   </div>
@@ -368,7 +396,7 @@ function PrivateSetup({ state, sizes, busy, spinning, locked, storageError, noti
     <div className="mb-6 flex items-start justify-between gap-4"><div><span className="text-xs font-bold tracking-widest text-brand">OPERATOR SETUP</span><h2 id="setup-title" className="mt-2 font-heading text-3xl">Display-only participant setup.</h2></div><button aria-label="Close setup" disabled={busy} onClick={onClose} className="rounded-lg p-2 text-muted"><Icon name="close" size={25} /></button></div>
     <p className="mb-6 text-base leading-relaxed text-muted">Upload real participants on the Draw studio page. This panel is only for display-only entries. They appear in the selector but can never win. Every round includes a real entrant.</p>
     {storageError && <div role="alert" className="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><p>{storageError}</p><div className="mt-4 flex flex-wrap gap-3"><button className="rounded-lg border border-line bg-white px-4 py-2" onClick={onBackup}>Download backup</button><button className="rounded-lg border border-line bg-white px-4 py-2" onClick={() => location.reload()}>Reload</button><button className="rounded-lg border border-line bg-white px-4 py-2" onClick={onClearSaved}>Clear saved data</button></div></div>}
-    <label className={`relative flex min-h-48 cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-brand/30 bg-soft/30 p-6 text-center focus-within:outline-2 focus-within:outline-brand ${locked || busy ? 'cursor-default opacity-60' : ''}`} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); onUpload(e.dataTransfer.files[0], false) }}><span className="mb-3 text-brand"><Icon name="upload" size={30} /></span><strong className="text-lg">Display-only participants</strong><p className="mt-2 text-sm text-muted">{locked ? 'Locked for this draw' : 'Drop CSV here or browse files'}</p><span className="mt-3 text-sm font-semibold text-brand">{state.fake.length} loaded</span><input type="file" className="absolute size-px opacity-0" accept=".csv,text/csv" aria-label="Upload fake participants CSV" disabled={locked || busy || !!storageError} onChange={e => { onUpload(e.target.files?.[0], false); e.target.value = '' }} /></label>
+    <label className={`relative mt-6 flex min-h-48 cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-brand/30 bg-soft/30 p-6 text-center focus-within:outline-2 focus-within:outline-brand ${locked || busy ? 'cursor-default opacity-60' : ''}`} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); onUpload(e.dataTransfer.files[0], false) }}><span className="mb-3 text-brand"><Icon name="upload" size={30} /></span><strong className="text-lg">Display-only participants</strong><p className="mt-2 text-sm text-muted">{locked ? 'Locked for this draw' : 'Drop CSV here or browse files'}</p><span className="mt-3 text-sm font-semibold text-brand">{state.fake.length} loaded</span><input type="file" className="absolute size-px opacity-0" accept=".csv,text/csv" aria-label="Upload fake participants CSV" disabled={locked || busy || !!storageError} onChange={e => { onUpload(e.target.files?.[0], false); e.target.value = '' }} /></label>
     <p className="mt-4 text-sm leading-relaxed text-muted">CSV up to 3 MB. Duplicate coupon codes are rejected. Repeated phone numbers are allowed. All real rows are eligible, regardless of CSV status or week.</p>
     {sizes.length > 0 && <p className="mt-4 rounded-xl bg-paper p-4 text-sm">Round sizes: <strong>{sizes.join(' · ')}</strong></p>}
     {notice && <p role="status" className="mt-5 rounded-xl border border-brand/25 bg-soft p-4 text-base leading-relaxed text-brand">{notice}</p>}
@@ -382,6 +410,7 @@ function GiftEditor({ gift, notice, busy, existing, onClose, onName, onImage, on
   return <dialog ref={dialog} aria-labelledby="gift-title" onCancel={e => { e.preventDefault(); if (!busy) onClose() }} className="m-auto max-h-[90vh] w-[min(500px,94vw)] overflow-auto rounded-3xl border border-line bg-white p-7 text-ink shadow-2xl backdrop:bg-ink/40 backdrop:backdrop-blur-sm">
     <div className="mb-6 flex items-center justify-between"><h2 id="gift-title" className="font-heading text-3xl">{existing ? 'Edit your gift' : 'Something special.'}</h2><button aria-label="Close gift editor" disabled={busy} onClick={onClose} className="p-2 text-muted"><Icon name="close" size={24} /></button></div>
     <img className="mb-6 h-56 w-full rounded-2xl bg-cream object-contain" src={gift.image} alt="Gift preview" />
+    <p className="mb-4 text-sm text-muted">Prize code: <code className="font-semibold">{gift.code}</code></p>
     <label className="mb-5 block text-base font-semibold">Gift name<input autoFocus maxLength={80} value={gift.name} placeholder="What will they win?" onChange={e => onName(e.target.value)} className="mt-2 block w-full rounded-xl border border-line bg-paper px-4 py-3.5 text-base font-normal" /></label>
     <label className="mb-5 block text-base font-semibold">Gift image<input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy} onChange={e => onImage(e.target.files?.[0])} className="mt-2 block w-full rounded-xl border border-line bg-paper px-3 py-3 text-sm font-normal" /><small className="mt-2 block text-sm font-normal text-muted">PNG, JPEG, or WebP · under 800 KB</small></label>
     {notice && <p role="status" className="mb-5 rounded-xl border border-brand/20 bg-soft p-4 text-base text-brand">{notice}</p>}
